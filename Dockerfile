@@ -6,20 +6,21 @@ FROM python:3.11-slim-bookworm
 
 # Etiqueta para mantener el software y su autor
 LABEL maintainer="NexusDev"
-LABEL description="Microservicio para la conversión de archivos DOCX a PDF usando FastAPI y LibreOffice."
+LABEL description="Microservicio para la conversión de archivos usando FastAPI, LibreOffice e ImageMagick."
 
 # Establecer variables de entorno para evitar diálogos interactivos durante la instalación
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 # ==============================================================================
-# Instalación de Dependencias del Sistema (LibreOffice)
+# Instalación de Dependencias del Sistema (LibreOffice y ImageMagick)
 # ==============================================================================
-# Actualizar los repositorios e instalar LibreOffice en modo headless (sin GUI)
+# Actualizar los repositorios e instalar las herramientas de conversión
 # --no-install-recommends reduce el tamaño final de la imagen
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libreoffice-writer \
+    imagemagick \
     && \
     # Limpiar la caché de apt para mantener la imagen ligera
     rm -rf /var/lib/apt/lists/*
