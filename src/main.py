@@ -2,8 +2,8 @@ import os
 import shutil
 import subprocess
 import tempfile
-import uuid
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from starlette.background import BackgroundTask
 from fastapi.responses import FileResponse
 
 # --------------------------------------------------------------------------
@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 app = FastAPI(
     title="Servicio de Conversión de Archivos",
     description="Un microservicio para convertir archivos de un formato a otro.",
-    version="0.1.0",
+    version="0.2.0", # Versión actualizada
 )
 
 # --------------------------------------------------------------------------
@@ -43,10 +43,8 @@ async def convert_docx_to_pdf(file: UploadFile = File(...)):
     3.  Guarda el archivo DOCX subido en el directorio temporal.
     4.  Ejecuta el comando de LibreOffice para la conversión.
     5.  Verifica que el archivo PDF haya sido creado.
-    6.  Devuelve el archivo PDF al cliente.
-    7.  Limpia el directorio temporal y sus contenidos.
+    6.  Devuelve el archivo PDF y agenda la limpieza del directorio temporal.
     """
-    # Validación del tipo de archivo
     if file.content_type not in [
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/msword",
@@ -56,24 +54,16 @@ async def convert_docx_to_pdf(file: UploadFile = File(...)):
             detail=f"Formato de archivo no soportado: {file.content_type}. Se requiere un archivo DOCX.",
         )
 
-    # Crear un directorio de trabajo temporal y seguro
     temp_dir = tempfile.mkdtemp()
-    input_path = os.path.join(temp_dir, file.filename)
-    
-    # Asignar un nombre de archivo de salida predecible
-    base_filename = os.path.splitext(file.filename)[0]
-    output_filename = f"{base_filename}.pdf"
-    output_path = os.path.join(temp_dir, output_filename)
-
     try:
-        # Guardar el archivo subido en el disco temporal
+        input_path = os.path.join(temp_dir, file.filename)
+        base_filename = os.path.splitext(file.filename)[0]
+        output_filename = f"{base_filename}.pdf"
+        output_path = os.path.join(temp_dir, output_filename)
+
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # Comando para ejecutar LibreOffice en modo headless
-        # --convert-to pdf:writer_pdf_Export: Especifica el formato de salida y el filtro
-        # --outdir <dir>: Especifica el directorio de salida
-        # <input_path>: Archivo de entrada
         command = [
             "libreoffice",
             "--headless",
@@ -84,42 +74,31 @@ async def convert_docx_to_pdf(file: UploadFile = File(...)):
             input_path,
         ]
 
-        # Ejecutar el proceso de conversión
         process = subprocess.run(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=30  # Timeout de 30 segundos para evitar procesos colgados
+            timeout=60  # Aumentado a 60s para archivos grandes
         )
 
-        # Verificar si la conversión fue exitosa
-        if process.returncode != 0:
-            error_message = process.stderr.decode("utf-8")
+        if not os.path.exists(output_path) or process.returncode != 0:
+            error_details = process.stderr.decode("utf-8") or process.stdout.decode("utf-8")
             raise HTTPException(
                 status_code=500,
-                detail=f"Error durante la conversión con LibreOffice: {error_message}",
+                detail=f"Error en la conversión. LibreOffice no generó el archivo. Detalles: {error_details}",
             )
 
-        if not os.path.exists(output_path):
-            # Lee el stdout para dar más información sobre por qué no se creó el archivo
-            stdout_message = process.stdout.decode("utf-8")
-            raise HTTPException(
-                status_code=500,
-                detail=f"El archivo convertido no se encontró. Salida de LibreOffice: {stdout_message}",
-            )
-
-        # Devolver el archivo PDF. FastAPI se encarga de la limpieza del FileResponse.
+        # Correcto: Agendar la limpieza para DESPUÉS de que el archivo sea enviado
+        cleanup_task = BackgroundTask(shutil.rmtree, temp_dir)
+        
         return FileResponse(
             path=output_path,
             media_type="application/pdf",
             filename=output_filename,
+            background=cleanup_task,
         )
-
     except Exception as e:
-        # Captura cualquier excepción no esperada para un logging más detallado
-        raise HTTPException(status_code=500, detail=f"Un error inesperado ocurrió: {str(e)}")
-
-    finally:
-        # Asegurar la limpieza del directorio temporal y todos sus contenidos
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+        # En caso de cualquier otro error, asegurarse de limpiar.
+        shutil.rmtree(temp_dir)
+        # Re-lanzar la excepción para que FastAPI la maneje
+        raise e
