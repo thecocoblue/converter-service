@@ -71,15 +71,14 @@ async def convert_docx_to_pdf(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, buffer)
 
         # Comando para ejecutar LibreOffice en modo headless
-        # --convert-to pdf: Especifica el formato de salida
+        # --convert-to pdf:writer_pdf_Export: Especifica el formato de salida y el filtro
         # --outdir <dir>: Especifica el directorio de salida
         # <input_path>: Archivo de entrada
         command = [
             "libreoffice",
             "--headless",
-            "--writer",
             "--convert-to",
-            "pdf",
+            "pdf:writer_pdf_Export",
             "--outdir",
             temp_dir,
             input_path,
@@ -102,9 +101,11 @@ async def convert_docx_to_pdf(file: UploadFile = File(...)):
             )
 
         if not os.path.exists(output_path):
+            # Lee el stdout para dar más información sobre por qué no se creó el archivo
+            stdout_message = process.stdout.decode("utf-8")
             raise HTTPException(
                 status_code=500,
-                detail="El archivo convertido no se encontró después de la ejecución.",
+                detail=f"El archivo convertido no se encontró. Salida de LibreOffice: {stdout_message}",
             )
 
         # Devolver el archivo PDF. FastAPI se encarga de la limpieza del FileResponse.
