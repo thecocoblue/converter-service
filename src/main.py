@@ -12,10 +12,11 @@ from urllib.parse import urlparse
 # --------------------------------------------------------------------------
 # Configuración
 # --------------------------------------------------------------------------
+APP_VERSION = "4.1.0"
 app = FastAPI(
-    title="Servicio de Conversión de Archivos v4",
+    title=f"Servicio de Conversión de Archivos v{APP_VERSION}",
     description="Un microservicio para convertir archivos subidos o desde una URL.",
-    version="4.0.0",
+    version=APP_VERSION,
 )
 
 # Modelo Pydantic para la petición de conversión desde URL
@@ -60,7 +61,7 @@ def get_command(tool, input_path, to_format, temp_dir):
         return [
             "libreoffice", "--headless", "--convert-to", to_format,
             "--outdir", temp_dir, input_path
-        ], output_path
+        ], os.path.join(temp_dir, f"input.{to_format}") # LibreOffice renombra el archivo de entrada
     if tool == "imagemagick":
         if input_path.endswith('.pdf'):
             input_path += "[0]"
@@ -72,9 +73,9 @@ def get_command(tool, input_path, to_format, temp_dir):
 # --------------------------------------------------------------------------
 # Endpoints
 # --------------------------------------------------------------------------
-@app.get("/health", summary="Verificar estado del servicio", tags=["Monitoring"])
+@app.get("/health", summary="Verificar estado y versión del servicio", tags=["Monitoring"])
 def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "version": APP_VERSION}
 
 @app.get("/supported-formats", summary="Listar conversiones soportadas", tags=["Información"])
 def supported_formats():
@@ -92,7 +93,6 @@ async def convert_file_upload(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al procesar el archivo subido: {str(e)}")
 
-
 @app.post("/convert-from-url", summary="Convierte un archivo desde una URL", tags=["Conversión"])
 async def convert_from_url(request: UrlConversionRequest):
     async with httpx.AsyncClient() as client:
@@ -100,16 +100,11 @@ async def convert_from_url(request: UrlConversionRequest):
             response = await client.get(str(request.url), follow_redirects=True, timeout=60)
             response.raise_for_status()
             content = response.content
-            
-            # Extraer el nombre del archivo de la URL
             path = urlparse(str(request.url)).path
             original_filename = os.path.basename(path)
-            
-            if not original_filename: # Si no hay nombre de archivo en la URL
+            if not original_filename:
                 raise HTTPException(status_code=400, detail="No se pudo determinar el nombre del archivo desde la URL.")
-
             return await process_conversion(original_filename, request.to_format, content)
-
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=f"Error al obtener el archivo desde la URL: {e.response.text}")
         except httpx.RequestError as e:
@@ -151,7 +146,6 @@ async def process_conversion(original_filename: str, to_format: str, content: by
         cleanup_task = BackgroundTask(shutil.rmtree, temp_dir)
         output_mime_type = SUPPORTED_MIME_TYPES.get(to_format, "application/octet-stream")
         
-        # Generar nombre de archivo de salida
         base_filename = os.path.splitext(original_filename)[0]
         final_output_filename = f"{base_filename}.{to_format.lower()}"
 
